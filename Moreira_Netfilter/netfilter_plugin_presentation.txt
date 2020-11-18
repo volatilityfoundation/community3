@@ -1,0 +1,118 @@
+Netfilter plugin
+================
+
+Introduction
+------------
+This plugin presents many improvement to the Volatility 2 Netfilter plugin.
+It even provides improvements and bugfixes from my previous pull-request for Volatility 2.
+ * https://github.com/volatilityfoundation/volatility/pull/577
+
+Throughout the Linux Kernel history, there were five different ways the Netfilter hooks were imlemented and three other versions of the Ingress hooks in the Linux kernel. This plugin support every single one of them.
+    Netfilter hooks implementations based on the vanilla kernel version.
+        * v2.6ish to v4.2.8
+        * v4.3 to v4.8.17
+        * v4.9 to 4.13.16
+        * v4.14 to v4.15.18
+        * v4.16 to latest (v5.8 at the time of this writing)
+
+    Netfilter Ingress hooks implementations:
+        v4.2 to 4.8.17
+        v4.9 to 4.13.16
+        v4.14 to latest (v5.8 at the time of this writing)
+
+In addition, this plugin gathers Netfilter hook information not just for IPv4 but for all existing protocol families, IPV4, IPv6, ARP, BRIDGE, DECNET and INGRESS hooks.
+
+Compare with the legacy Netfilter plugin, two new columns were added the output report, the network namespace id and the module name or symbol name to which the hook address belongs to, allowing us to easily identify suspicious kernel modules using network hooks.
+If a module is part of the kernel text, it also resolves the symbol to that specific address which is showed between square brackets, ie: [selinux_ipv4_forward]
+
+New features
+------------
+In contrast with my previous pull-request for Volatility 2, it does not depend on the kernel banner version to know which plugin implementation to execute. It includes a new mechanism inspired on the os_distinguisher() function from the Windows poolscanner plugin:
+https://github.com/volatilityfoundation/volatility3/blob/595a94304d7f7c93872f1dea273dd96a763afd59/volatility/framework/plugins/windows/poolscanner.py#L114
+This new feature allows any plugin to test if the current symbol table contains a combination of symbols, data types, member names and data type of those members which define the kernel running in the machine being analysed. This way, it is possible to write plugins which support different kernel implementations without depending on the banner version number but assesing the symbol table itself. The checks can be nested in a chain, allowing that way to take advantage of the previous checks.
+
+For instance, to make sure the kernel being analysed contains the following types, they contain the respective members and those member are from their respective type and subtypes:
+
+        struct list_head net_namespace_list;  # <- 'struct net' type
+        struct net { ... struct netns_nf nf; ... }
+        struct netns_nf { ... struct nf_hook_entry __rcu *hooks[NFPROTO_NUMPROTO][NF_MAX_HOOKS]; ... }
+
+The following guarantees that the correct plugin implementation be executed:
+    symtab_checks = symbol_table_distinguisher(
+        CheckSymbolExists(symbol_name='net_namespace_list'),
+        CheckTypes(
+            type_names=('array', 'array', 'pointer', 'nf_hook_entry'),
+            from_obj=CheckMember(
+                member_name='hooks',
+                from_obj=CheckTypeExists(type_name='netns_nf')
+            )
+        ),
+    )
+
+Usage
+-----
+Once the provided files, source code and ISF, are copied to the respective paths, it can be executed straight away. It does not support any argument, so providing just using a memory dump file and the name of the plugin is enough:
+
+    ./vol.py -f [mem_dump_file] linux.netfilter.Netfilter
+
+Testing
+-------
+The plugin was tested using memory dumps from machines running kernels using every single Netfilter implementation.
+For the main Netfilter hooks the following kernels and distros were used to test the plugin:
+    xxxx  <= kv <= v4.2.8       3.13.0-117 / Ubuntu 12.04
+    v4.3  <= kv <= v4.8.17      4.4.0-142  / Ubuntu 14.04
+    v4.9  <= kv <= 4.13.16      4.10.0-42  / Ubuntu 16.04
+    v4.14 <= kv <= v4.15.18     4.15.0-45  / Ubuntu 16.04
+    v4.16 <= kv <= KV_LATEST    4.18.0     / Ubuntu 18.10
+
+For Netfilter Ingress hooks, the following kernels and distros were used:
+    4.2 <= kv <= 4.8.17         4.4.0-142   / Ubuntu 14.04 
+    4.9 <= kv <= 4.13.16        4.10.0-42   / Ubuntu 16.04
+    4.14 <= kv <= KV_LATEST     4.18.0      / Ubuntu 18.10
+
+Motivation:
+-----------
+In order to hide the malicious activity and to allow freely communicate with the Command and Control server (C2), Advance Persistent Threats (ATP) usually use Linux Kernel rootkits. The way to do this is installing Netfilter hooks which open a hole in the firewall allowing that communication.
+I wrote the first version of this plugin when I was carriying out a memory forensic investigation of a compromised AWS cloud instance. This plugin allowed to discover the most important piece of the attack, a Linux kernel rootkit orchestrating the whole attack, dropping files and interacting with counterparts running in user-space and openning the network communication with the C2 server without being detected by any control.
+This compromised AWS Cloud instance running CentOS 7 was infected with a kernel rookit (Cloud Snooper) using Netfiler hooks. The following output shows a machine compromised by Cloud Snooper, using the snd_floppy LKM.
+
+./vol.py -f centos7-infected.lime -r pretty linux.netfilter.Netfilter
+Volatility 3 Framework 1.1.0-beta.1
+  | NS | Proto |         Hook |    Priority |        Handler | IsHooked |            Module
+* |  0 |  IPV4 |  PRE_ROUTING |        -400 | 0xffffc04e8010 |     True |    nf_defrag_ipv4
+* |  0 |  IPV4 |  PRE_ROUTING |        -200 | 0xffffc04f5380 |     True | nf_conntrack_ipv4
+* |  0 |  IPV4 |  PRE_ROUTING |        -100 | 0xffffc04fa090 |     True |       iptable_nat
+* |  0 |  IPV4 |     LOCAL_IN | -2147483648 | 0xffffc0415b40 |     True |        snd_floppy <- Cloud Snooper
+* |  0 |  IPV4 |     LOCAL_IN |           0 | 0xffffc03a4000 |     True |    iptable_filter
+* |  0 |  IPV4 |     LOCAL_IN |         100 | 0xffffc04fa000 |     True |       iptable_nat
+* |  0 |  IPV4 |     LOCAL_IN |         300 | 0xffffc04f5020 |     True | nf_conntrack_ipv4
+* |  0 |  IPV4 |     LOCAL_IN |  2147483647 | 0xffffc04f5280 |     True | nf_conntrack_ipv4
+* |  0 |  IPV4 |      FORWARD |           0 | 0xffffc03a4000 |     True |    iptable_filter
+* |  0 |  IPV4 |    LOCAL_OUT | -2147483648 | 0xffffc0415000 |     True |        snd_floppy <- Cloud Snooper
+* |  0 |  IPV4 |    LOCAL_OUT |        -400 | 0xffffc04e8010 |     True |    nf_defrag_ipv4
+* |  0 |  IPV4 |    LOCAL_OUT |        -200 | 0xffffc04f5620 |     True | nf_conntrack_ipv4
+* |  0 |  IPV4 |    LOCAL_OUT |        -100 | 0xffffc04fa050 |     True |       iptable_nat
+* |  0 |  IPV4 |    LOCAL_OUT |           0 | 0xffffc03a4000 |     True |    iptable_filter
+* |  0 |  IPV4 | POST_ROUTING |         100 | 0xffffc04fa070 |     True |       iptable_nat
+* |  0 |  IPV4 | POST_ROUTING |         300 | 0xffffc04f5020 |     True | nf_conntrack_ipv4
+* |  0 |  IPV4 | POST_ROUTING |  2147483647 | 0xffffc04f5280 |     True | nf_conntrack_ipv4
+
+Why it should win the contest
+-----------------------------
+There are many reason I think it could be a good cadidate to win the contest.
+1) It is extremely useful for discovering Linux Kernel rootkits. See a recent report below (*).
+2) It is probably the only plugin intentionally supporting all Linux Kernel versions. Of course there other part of the kernel that have not changed at all or haven't changed that much, but it is not the case of Netfilter hooks.
+3) Unlike other pugins, where there are other user-space tools offering the same output or similar functionality. The only way to display the Netfilter hooks is by using this plugin. This information is not exported to user-space by the Linux kernel in any other ways.
+4) It is widely tested.
+5) It used the same code style used in Volatility 3 which make easier to integrate with head.
+6) It is well documented.
+7) It is probably the largest plugin in Volatilty 3.
+
+(*)
+On the 13 August 2020, the NSA and the FBI exposed undiscloded Linux malware dubbed Drovorub. 
+Drovorub is a Linux malware toolset where one of the components is a kernel module rootkit.
+This malware has been attributed to Unit 26165, which is one of the APT28/FancyBear units associated with the Russian military intelligence agency (GRU). The malicious kernel module rootkit uses Netfilter hooks to prevent that any other Netfilter hook blocks a malicious packets.
+https://media.defense.gov/2020/Aug/13/2002476465/-1/-1/0/CSA_DROVORUB_RUSSIAN_GRU_MALWARE_AUG_2020.PDF
+Drovorub install Netfilter hooks in LOCAL_IN and LOCAL_OUT, the same way Cloud Snooper does.
+Using this plugin, the NSA and the FBI could easily detect the presence of this malicious Kernel module rootkit.
+

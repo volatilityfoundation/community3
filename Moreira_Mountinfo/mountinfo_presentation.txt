@@ -1,0 +1,85 @@
+MountInfo plugin
+================
+
+Introduction
+------------
+This new plugin provides information about mount point in the processes mount namespaces.
+The MountInfo plugin mimics the Linux kernel, showing pretty much the same information than the
+/proc/[pid]/mountinfo counterpart. As man page PROC(5) explains, it distinguishes between 'mount' and 
+'superblock' options, shows propagation state, mount and parent identifiers and other information that
+is missing in the older /proc/[pid]/mounts file. 
+Unfortunately, the symbol types needed to parse the specific filesystem flags and options are not in 
+the Dwarf information provided by the kernel debug symbol package, so that information is missing in 
+the output.
+ 
+I've provided two examples in two different txt files.
+ - mountinfo_example1.txt: It's chroot'ed environment with multiple mounts. The example shows the
+    plugin potential showing the mount point information in very depth detail.
+ - mountinfo_example2.txt:  It's a host with two Docker containers, and an extra ext2 filesystem 
+    mounted in one of them. This example show how accurate is the information provided compared with
+    the one the Kernel provides.
+
+Features
+--------
+* Even though namespaces are in the Linux kernel since very early times, it's the first Volatility 
+  plugin in taking this into account.
+* Allows two format outputs, mountinfo and mount. This could also be split in two different plugins.
+* Allows to specifify one, many or all existent pids showing their respective mount namespaces.
+* Adds the inode as namespace id as is explained in man page NAMESPACES(7).
+* Distinguishes between 'mount' and 'superblock' options
+* Shows propagation state.
+* Mount and parent identifiers and other information that is missing in the older /proc/[pid]/mounts 
+  file.
+* Adds a new _do_get_path() implementation based on the Linux kernel source code. The current 
+  implementation in LinuxUtilities, which is a legacy of Volatility 2, is incorrect and leads to 
+  inaccurate information. Unfortunatelly, I was unable to fix that one because it was adapted to 
+  provide same extra functionality to other parts of the framework and it will require extra time to
+  test the other modules. Happy to work together to find a fix ;).
+* Extended many linux/extension types with helper functions to provide similar functionality than the
+  Linux Kernel. i.e.: superblock, mount, dentry and added mnt_namespace.
+* Replaced linux/extension dentry->path() method with a implementaion which mimics the Linux kernel 
+  __dentry_path() function. The old one doesn't return the path but just the dentry name.
+
+Usage
+-----
+  
+usage: volatility linux.mountinfo.MountInfo [-h] [--pids [PIDS [PIDS ...]]] [--all] [--mount-format]
+
+optional arguments:
+  -h, --help            show this help message and exit
+  --pids [PIDS [PIDS ...]]
+                        Filter on specific process IDs. Default is pid 1
+  --all                 Shows information about mount points for each process mount namespace. It 
+                        could take a while depending on the number of processes running. Note that 
+                        if this argument is not specified it uses the root mount namespace based 
+                        on pid 1.
+  --mount-format        Shows a brief summary of a process mount points information with similar 
+                        output format to the older /proc/[pid]/mounts or the user-land command 
+                        'mount -l'.
+
+Testing
+-------
+The plugin was tested using the following Linux kernels and distros:
+ * 3.10.0-862 / CentOS 7
+ * 3.13.0-117 / Ubuntu 12.04
+ * 4.4.0-142  / Ubuntu 14.04 
+ * 4.10.0-42  / Ubuntu 16.04
+ * 4.15.0-45  / Ubuntu 16.04
+ * 4.18.0-10  / Ubuntu 18.10
+
+Motivation:
+-----------
+With the growing adoption of containers, threat actors are already exploiting container instances.
+Although we are still in the infancy of this attacks, I reckon it is good time for Volatility to add 
+more visibility of the different namespaces, preparing also the framework for other plugins.
+
+Why it should win the contest
+-----------------------------
+1) It's the first plugin in taking namespaces into account.
+2) It provides very accurate information based on the Linux Kernel internals.
+3) The plugin and the code included in this plugin can be used by other future plugins.
+4) It can be considered a two-in-one plugin, mountinfo + mount.
+5) It is widely tested in different Kernel versions and configurations.
+6) It uses the same code style used in Volatility 3, making easier to integrate with head.
+7) It is well documented.
+
