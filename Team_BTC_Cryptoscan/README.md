@@ -1,0 +1,1 @@
+https://github.com/BoB10th-BTC/CryptoScan/blob/master/cryptoscan.py
